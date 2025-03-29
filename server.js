@@ -71,6 +71,18 @@ async function waitForPrediction(predictionId, maxAttempts = 30) {
   throw new Error("Prediction timed out");
 }
 
+// Helper function to safely delete a file
+function deleteFile(filePath) {
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log('File deleted successfully:', filePath);
+    }
+  } catch (error) {
+    console.error('Error deleting file:', error);
+  }
+}
+
 // Generate lyrics using ChatGPT
 async function generateLyrics(description, mood, genre) {
   try {
@@ -127,6 +139,8 @@ app.post('/api/generate-lyrics', async (req, res) => {
 
 // Generate music based on uploaded file and lyrics
 app.post('/api/generate-music', upload.single('referenceSong'), async (req, res) => {
+  let uploadedFilePath = null;
+  
   try {
     console.log('Received request:', {
       body: req.body,
@@ -139,8 +153,8 @@ app.post('/api/generate-music', upload.single('referenceSong'), async (req, res)
       throw new Error('REPLICATE_API_TOKEN is not set in environment variables');
     }
 
-    const { lyrics } = req.body; 
-//hi
+    const { lyrics } = req.body;
+
     if (!lyrics) {
       throw new Error('Lyrics are required');
     }
@@ -149,8 +163,10 @@ app.post('/api/generate-music', upload.single('referenceSong'), async (req, res)
       throw new Error('No file uploaded');
     }
 
+    uploadedFilePath = req.file.path;
+
     // Read the file as a buffer
-    const fileBuffer = await readFile(req.file.path);
+    const fileBuffer = await readFile(uploadedFilePath);
     console.log('File read as buffer, size:', fileBuffer.length);
     
     // Convert buffer to base64 string
@@ -190,9 +206,6 @@ app.post('/api/generate-music', upload.single('referenceSong'), async (req, res)
 
     console.log('Music generation successful:', completed.output);
     
-    // Clean up the uploaded file
-    fs.unlinkSync(req.file.path);
-
     res.json({
       success: true,
       track: completed.output
@@ -211,11 +224,23 @@ app.post('/api/generate-music', upload.single('referenceSong'), async (req, res)
       error: error.message || 'Failed to generate music',
       details: error.response?.data || 'No additional details available'
     });
+  } finally {
+    // Always clean up the uploaded file
+    if (uploadedFilePath) {
+      deleteFile(uploadedFilePath);
+    }
   }
 });
 
-// Serve uploaded files
-app.use('/uploads', express.static('uploads'));
+// Clean up uploads directory on server shutdown
+process.on('SIGTERM', () => {
+  const uploadDir = 'uploads';
+  if (fs.existsSync(uploadDir)) {
+    fs.rmSync(uploadDir, { recursive: true, force: true });
+    console.log('Uploads directory cleaned up');
+  }
+  process.exit(0);
+});
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
